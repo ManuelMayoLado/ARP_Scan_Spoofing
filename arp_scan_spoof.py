@@ -1,12 +1,15 @@
 import netifaces
 import multiprocessing
 import subprocess
+from subprocess import PIPE
 from Tkinter import *
 from ttk import *
 from scapy.all import *
 import time
 
 interfaces = {}
+gateways_iff = []
+gateways = []
 
 def addr2bin(addr):
 	binary = ""
@@ -59,44 +62,32 @@ def get_hostname(ip,gw,send_end):
 
 	send_end.send(lista_names)
 
-def ping_hosts(red,broadcast):
-	lista_procesos = []
-	pipe_list = []
-	ip_l = red.split(".")
-	broadcast_l = broadcast.split(".")
-	ip_l[3] = str(int(ip_l[3])+1)
-	while ip_l != broadcast_l:
-		recv_end, send_end = multiprocessing.Pipe(False)
-		p = multiprocessing.Process(target=ping_h, args=(".".join(ip_l),send_end))
-		lista_procesos.append(p)
-		pipe_list.append(recv_end)
-		p.start()
-		for n in range(4):
-			if ip_l[n] == "255":
-				for n in range(4)[n:4]:
-					ip_l[n] = "0"
-				ip_l[n-1] = str(int(ip_l[n-1])+1)
-		ip_l[3] = str(int(ip_l[3])+1)
-	for proc in lista_procesos:
-		proc.join()
-	results = [x.recv() for x in pipe_list]
-	return [x for x in results if x]
+def config_iface(iface):
+	global interfaces
+	global gateways_iff
+	global gateways
+	addrs = netifaces.ifaddresses(iface)
+	if not iface in interfaces:
+		interfaces[iface] = {} 
+	if 17 in addrs:
+		interfaces[iface]["mac"] = addrs[17][0]["addr"]
+	if 2 in addrs:
+		interfaces[iface]["ip"] = addrs[2][0]["addr"]
+		interfaces[iface]["mask"] = addrs[2][0]["netmask"]
+	if iface in gateways_iff:
+		interfaces[iface]["gateway"] = [x for x in gateways if x[2] == True and iface == x[1]][0][0]
 
-def ping_h(ip,send_end):
-	#reply = sr1(IP(dst=ip, ttl=20)/ICMP(),timeout=1,verbose=0)
-	ping = subprocess.Popen(["ping","-c 1",ip],stdout=PIPE,stderr=PIPE,stdin=PIPE)
-	ping_read = ping.stdout.read()
-	if re.findall("(\d) received",ping_read):
-		reply = int(re.findall("(\d) received",ping_read)[0])
-	else:
-		reply = False
-	if reply:
-		send_end.send(ip)
-	else:
-		send_end.send(False)
+	if len(interfaces[iface].values()) == 4 and iface != "lo":
+		for iff in interfaces:
+			ip = interfaces[iface]["ip"]
+			mask = interfaces[iface]["mask"]
+			interfaces[iface]["red"] = red(ip,mask)
+			interfaces[iface]["broadcast"] = broadcast(interfaces[iface]["red"],mask)
 		
 def init():
 	global interfaces
+	global gateways_iff
+	global gateways
 	if __name__ == "__main__":
 		if 2 in netifaces.gateways():
 			gateways = netifaces.gateways()[2]
@@ -106,25 +97,11 @@ def init():
 
 		gateways_iff = [x[1] for x in gateways if x[2] == True]
 
-		for iff in netifaces.interfaces():	
-			addrs = netifaces.ifaddresses(iff)
-			interfaces[iff] = {}
-			if 17 in addrs:
-				interfaces[iff]["mac"] = addrs[17][0]["addr"]
-			if 2 in addrs:
-				interfaces[iff]["ip"] = addrs[2][0]["addr"]
-				interfaces[iff]["mask"] = addrs[2][0]["netmask"]
-			if iff in gateways_iff:
-				interfaces[iff]["gateway"] = [x for x in gateways if x[2] == True and iff == x[1]][0][0]
+		for iff in netifaces.interfaces():
+			config_iface(iff)
 
 		interfaces = {iff:interfaces[iff] for iff in interfaces 
-				if iff != "lo" and len(interfaces[iff].values()) == 4}
-
-		for iff in interfaces:
-			ip = interfaces[iff]["ip"]
-			mask = interfaces[iff]["mask"]
-			interfaces[iff]["red"] = red(ip,mask)
-			interfaces[iff]["broadcast"] = broadcast(interfaces[iff]["red"],mask)
+				if iff != "lo" and len(interfaces[iff].values()) == 6}
 
 		if interfaces:
 			app = App()
@@ -207,7 +184,7 @@ class InfoInterfaces():
 		self.red_label.grid(column=1,row=5,padx=5,pady=5,sticky=W)
 		self.broadcast_label.grid(column=1,row=6,padx=5,pady=5,sticky=W)
 
-		self.num_mask_label.grid(column=2,row=3,padx=5,pady=5,sticky=W)
+		#self.num_mask_label.grid(column=2,row=3,padx=5,pady=5,sticky=W)
 
 		self.escanear = Button(master.frame,text="Escanear",command=master.escaneo)
 		self.escanear.grid(column=1,row=7,padx=5,pady=10,sticky=W)
@@ -219,17 +196,19 @@ class InfoInterfaces():
 		entry.config(state="readonly")
 
 	def iface_selec(self,event):
+		new_iface = self.combobox["values"][self.combobox.current()]
+		config_iface(new_iface)
 		if self.interface_selec in netifaces.interfaces():
 			info_interface = netifaces.ifaddresses(self.interface_selec)
 			if 2 in info_interface and 17 in info_interface:
-				self.interface_selec = self.combobox["values"][self.combobox.current()]
-				self.mac = interfaces[self.interface_selec]["mac"]
-				self.ip = interfaces[self.interface_selec]["ip"]
-				self.mask = interfaces[self.interface_selec]["mask"]
+				self.interface_selec = new_iface
+				self.mac = interfaces[new_iface]["mac"]
+				self.ip = interfaces[new_iface]["ip"]
+				self.mask = interfaces[new_iface]["mask"]
 				self.num_mask = str(addr2bin(self.mask).count("1"))
-				self.gateway = interfaces[self.interface_selec]["gateway"]
-				self.red = interfaces[self.interface_selec]["red"]
-				self.broadcast = interfaces[self.interface_selec]["broadcast"]
+				self.gateway = interfaces[new_iface]["gateway"]
+				self.red = interfaces[new_iface]["red"]
+				self.broadcast = interfaces[new_iface]["broadcast"]
 
 				self.write_entry(self.mac_label,self.mac)
 				self.write_entry(self.ip_label,self.ip)
@@ -281,9 +260,6 @@ class Host():
 		self.proceso = None
 
 	def spoof(self,master,ip,mac):
-		#style = Style()
-		#Style().configure("Red.TButton", foreground="darkred")
-		#Style().configure("Black.TButton", foreground="black")
 		if self.proceso:
 			self.button_spoof.config(text="Spoof")
 			self.button_spoof.config(style="Black.TButton")
@@ -292,7 +268,7 @@ class Host():
 			self.label_hostname.config(style="Black.TEntry")
 			self.label_netbios.config(style="Black.TEntry")
 			self.proceso.terminate()
-			self.proceso = False
+			self.proceso = None
 			print "Stop ARP Spoofing to", ip, mac
 		else:
 			self.button_spoof.config(style="Red.TButton")
@@ -309,11 +285,15 @@ class Host():
 		
 class App():
 	def __init__(self):
+
 		self.root = Tk()
 		self.frame = Frame(borderwidth=2,relief="groove")
 		self.frame.grid(row=0,column=0,columnspan=2,sticky=W+E,padx=5,pady=5)
 
 		self.Iinterfaces = InfoInterfaces(self)
+
+		self.barra_escaneo = Progressbar(self.frame,orient="horizontal",maximum=100)
+		self.barra_escaneo.grid(column=0,row=8,columnspan=2,padx=5,pady=10,sticky=W+E)
 
 		self.canvas = Canvas(self.root, bd=0, highlightthickness=0)		
 		self.frame_equipos = Frame(self.canvas)
@@ -327,6 +307,8 @@ class App():
 		self.canvas.grid(row=1,column=0,sticky=N+W+E+S,padx=5,pady=5)
 		self.canvas_frame = self.canvas.create_window((0,0),window=self.frame_equipos, anchor=N)
 		yscroll.grid(row=1,column=1, sticky=N+S+E, pady=5, padx=3)
+
+		self.escaneando = False
 
 		self.equipos_escaneo = []
 		self.hosts = []
@@ -342,24 +324,84 @@ class App():
 		self.frame_equipos.columnconfigure(2,weight=5)
 		self.frame_equipos.columnconfigure(3,weight=5)
 
+		self.time_update()
+
 		self.root.mainloop()
+
+	def time_update(self):
+		if self.escaneando:
+			if self.escaneando == 1:
+				self.ping_host_list = self.ping_hosts(self.Iinterfaces.red,self.Iinterfaces.broadcast)
+				self.ping_host_list = [ip for ip in self.ping_host_list if ip not in [self.Iinterfaces.ip,self.Iinterfaces.gateway] ]
+				print "Ping SCAN:", self.ping_host_list
+				self.escaneando += 1
+				self.barra_escaneo["value"] = 20
+			elif self.escaneando == 2:
+				pdst_ip = self.Iinterfaces.ip+"/"+self.Iinterfaces.num_mask
+				alive,dead=srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=pdst_ip), timeout=1, verbose=0, iface=self.Iinterfaces.interface_selec)
+				hosts_list_scan = []
+				for i in range(0,len(alive)):
+					ip = alive[i][1].psrc
+					mac = alive[i][1].hwsrc
+					hosts_list_scan.append([ip,mac])
+				self.hosts_list_final = self.show_arp_table(hosts_list_scan,self.ping_host_list)
+				print "ARP Scan:", self.hosts_list_final
+				self.escaneando += 1
+				self.barra_escaneo["value"] = 50
+			elif self.escaneando == 3:
+				self.pipe_list = []
+				self.procesos_gethost = []
+				gw = self.Iinterfaces.gateway
+				for host in self.hosts_list_final:
+					ip = host[0]
+					mac = host[1]
+					if ip != gw:
+						self.equipos_escaneo.append([ip,mac])
+						recv_end, send_end = multiprocessing.Pipe(False)
+						p = multiprocessing.Process(target=get_hostname,args=(ip,gw,send_end))
+						self.procesos_gethost.append(p)
+						self.pipe_list.append(recv_end)
+						p.start()
+				self.escaneando += 1
+				self.barra_escaneo["value"] = 80
+			elif self.escaneando == 4:			
+				if self.procesos_gethost:
+					p_n = 0
+					for proc in self.procesos_gethost:
+						self.procesos_gethost[p_n].join()
+						p_n += 1
+					#Label(self.frame_equipos,text="IP",relief="groove").grid(row=0,column=0, sticky=W+E, pady=5, padx=3)
+					#Label(self.frame_equipos,text="MAC",relief="groove").grid(row=0,column=1, sticky=W+E, pady=5, padx=3)
+					#Label(self.frame_equipos,text="Hostname",relief="groove").grid(row=0,column=2, sticky=W+E, pady=5, padx=3)
+					#Label(self.frame_equipos,text="NetBIOS",relief="groove").grid(row=0,column=3, sticky=W+E, pady=5, padx=3)
+					n_r = 0
+					for equipo in self.equipos_escaneo:
+						list_names = self.pipe_list[n_r].recv()
+						hostname,netbios = list_names
+						self.hosts.append(Host(self,equipo[0],equipo[1],hostname,netbios,n_r+1))
+						n_r += 1
+				print "Escaneo Finalizado."
+				self.escaneando += 1
+				self.barra_escaneo["value"] = 0
+			elif self.escaneando == 5:
+				self.escaneando = False
+				self.barra_escaneo["value"] = 0
+				Style().configure("Black.TButton", foreground="black")
+				self.Iinterfaces.escanear.config(style="Black.TButton")		
+		self.root.after(500,self.time_update)
 	
 	def onFrameConfigure(self, event):
 		canvas_height = self.canvas.winfo_height()
 		frame_equipos_height = event.height
 		self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-		#if canvas_height > frame_equipos_height:
-		#	self.canvas.itemconfig(self.canvas_frame, height=canvas_height-5)
-		#else:
-		#	self.canvas.itemconfig(self.canvas_frame, height=(len(self.frame_equipos.winfo_children())/4)*40)
 
 	def FrameWidth(self, event):
 		canvas_width = event.width-10
 		self.canvas.itemconfig(self.canvas_frame, width = canvas_width)
 
-	def show_arp_table(self,arp_scan_list):
+	def show_arp_table(self,arp_scan_list,ping_scan_list):
 		lista_hosts = []
-		arp_table = subprocess.check_output(["arp"])
+		arp_table = subprocess.check_output(["arp","-n"])
 		arp_table = arp_table.split("\n")
 		arp_table = arp_table[1:len(arp_table)]
 		for host in arp_table:
@@ -369,56 +411,67 @@ class App():
 		for host in arp_scan_list:
 			if not host in lista_hosts:
 				lista_hosts.append(host)
+		for host in ping_scan_list:
+			if not host in [ip[0] for ip in lista_hosts]:
+				arp_table_host = subprocess.check_output(["arp","-n",host])
+				arp_table_host = arp_table_host.split("\n")
+				if len(arp_table_host) >= 2:
+					arp_t = arp_table_host[1].split()
+					if len(arp_t) == 5:
+						lista_hosts.append([arp_t[0],arp_t[2]]) 
+					
 		return lista_hosts
 
-	def escaneo(self):
-		self.equipos_escaneo = []
-		self.hosts = []
-		if self.frame_equipos.winfo_children():
-			for widget in self.frame_equipos.winfo_children():
-    				widget.destroy()
-		print "Escaneando "+self.Iinterfaces.combobox["values"][self.Iinterfaces.combobox.current()]+"...."
-
-		print "Ping SCAN:",ping_hosts(self.Iinterfaces.red,self.Iinterfaces.broadcast)
-
-		pdst_ip = self.Iinterfaces.ip+"/"+self.Iinterfaces.num_mask
-		alive,dead=srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=pdst_ip), timeout=1, verbose=0)
-		hosts_list_scan = []
-		for i in range(0,len(alive)):
-			ip = alive[i][1].psrc
-			mac = alive[i][1].hwsrc
-			hosts_list_scan.append([ip,mac])
-		hosts_list_final = self.show_arp_table(hosts_list_scan)
-		print "ARP Scan:", hosts_list_final
+	def ping_hosts(self,red,broadcast):
+		lista_procesos = []
 		pipe_list = []
-		procesos_gethost = []
-		gw = self.Iinterfaces.gateway
-		for host in hosts_list_final:
-			ip = host[0]
-			mac = host[1]
-			if ip != gw:
-				self.equipos_escaneo.append([ip,mac])
-				recv_end, send_end = multiprocessing.Pipe(False)
-				p = multiprocessing.Process(target=get_hostname,args=(ip,gw,send_end))
-				procesos_gethost.append(p)
-				pipe_list.append(recv_end)
-				p.start()
-		if procesos_gethost:
-			p_n = 0
-			for proc in procesos_gethost:
-				procesos_gethost[p_n].join()
-				p_n += 1
-			Label(self.frame_equipos,text="IP",relief="groove").grid(row=0,column=0, sticky=W+E, pady=5, padx=3)
-			Label(self.frame_equipos,text="MAC",relief="groove").grid(row=0,column=1, sticky=W+E, pady=5, padx=3)
-			Label(self.frame_equipos,text="Hostname",relief="groove").grid(row=0,column=2, sticky=W+E, pady=5, padx=3)
-			Label(self.frame_equipos,text="NetBIOS",relief="groove").grid(row=0,column=3, sticky=W+E, pady=5, padx=3)
-			n_r = 0
-			for equipo in self.equipos_escaneo:
-				list_names = pipe_list[n_r].recv()
-				hostname,netbios = list_names
-				self.hosts.append(Host(self,equipo[0],equipo[1],hostname,netbios,n_r+1))
-				n_r += 1
-		print "Escaneo Finalizado."
+		ip_l = red.split(".")
+		broadcast_l = broadcast.split(".")
+		ip_l[3] = str(int(ip_l[3])+1)
+		while ip_l != broadcast_l:
+			recv_end, send_end = multiprocessing.Pipe(False)
+			p = multiprocessing.Process(target=self.ping_h, args=(".".join(ip_l),send_end))
+			lista_procesos.append(p)
+			pipe_list.append(recv_end)
+			p.start()
+			for n in range(4):
+				if ip_l[n] == "255":
+					for n in range(4)[n:4]:
+						ip_l[n] = "0"
+					ip_l[n-1] = str(int(ip_l[n-1])+1)
+			ip_l[3] = str(int(ip_l[3])+1)
+		for proc in lista_procesos:
+			proc.join()
+		results = [x.recv() for x in pipe_list]
+		return [x for x in results if x]
+
+	def ping_h(self,ip,send_end):
+		ping = subprocess.Popen(["ping","-c 1",ip],stdout=PIPE,stderr=PIPE,stdin=PIPE)
+		ping_read = ping.stdout.read()
+		if re.findall("(\d) received",ping_read):
+			reply = int(re.findall("(\d) received",ping_read)[0])
+		else:
+			reply = False
+		if reply:
+			send_end.send(ip)
+		else:
+			send_end.send(False)
+
+	def escaneo(self):
+		Style().configure("Red.TButton", foreground="darkred")
+		if not self.escaneando:
+			self.escaneando = 1
+			self.Iinterfaces.escanear.config(style="Red.TButton")
+			for h in self.hosts:
+				if h.proceso:
+					h.proceso.terminate()
+					h.proceso = None
+			self.equipos_escaneo = []
+			self.hosts = []
+			if self.frame_equipos.winfo_children():
+				for widget in self.frame_equipos.winfo_children():
+	    				widget.destroy()
+			print "Escaneando "+self.Iinterfaces.combobox["values"][self.Iinterfaces.combobox.current()]+"...."
 
 init()
 		
