@@ -11,6 +11,13 @@ interfaces = {}
 gateways_iff = []
 gateways = []
 
+def is_number(s):
+	try:
+		float(s)
+		return True
+	except:
+		return False
+
 def addr2bin(addr):
 	binary = ""
 	for num in addr.split("."):
@@ -214,7 +221,6 @@ class App():
 		self.treeview_hosts_spoofing.grid(row=0,column=0,sticky=W+E+N+S,padx=5,pady=5)
 
 		self.treeview_hosts_spoofing.tag_configure("par", background="#F2F2F2")
-		self.treeview_hosts_spoofing.tag_configure("selec", foreground="darkred")
 
 		self.treeview_hosts_spoofing.bind("<<TreeviewSelect>>",self.select_spoof)
 
@@ -255,7 +261,8 @@ class App():
 		self.exit = 1
 
 		for spoof in self.spoofs:
-			spoof.stop(self)
+			if spoof:
+				spoof.stop(self)
 
 	def select_ip_c(self,event):
 		self.ip_c_select = self.ip_changed_combobox["values"][self.ip_changed_combobox.current()]
@@ -269,12 +276,6 @@ class App():
 			datos_spoof_s = self.treeview_hosts_spoofing.item(id_s)["values"]
 			n_l = int(id_s)
 			self.spoof_s = self.spoofs[n_l]
-			#for spoof in self.spoofs:
-			#	if "selec" in spoof.tagx:
-			#		spoof.tagx.remove("selec")
-			self.spoof_s.tagx.append("selec")
-			self.treeview_hosts_spoofing.item(id_s,text="",values=datos_spoof_s,tags=(self.spoof_s.tagx))
-			#########
 			self.button_delete_spoof.config(state="normal")
 			self.entry_time_lapse.config(state="normal")
 			self.button_time_lapse.config(state="normal")
@@ -287,10 +288,6 @@ class App():
 			datos_host_s = self.treeview_hosts.item(id_h)["values"]
 			n_l = int(id_h)
 			self.host_s = self.hosts[n_l]
-			#for host in self.hosts:
-			#	if "selec" in host.tagx:
-			#		host.tagx.remove("selec")
-			#self.host_s.tagx.append("selec")
 			self.button_spoof.config(state="normal")
 
 	def onFrameConfigure(self, event):
@@ -611,8 +608,8 @@ class Spoof():
 		self.proceso.start()
 	
 	def change_time_lapse(self,master,time):
-		if time.isdigit() and int(time) > 0:
-			self.time_lapse = int(time)
+		if is_number(time) and float(time) > 0.1:
+			self.time_lapse = float(time)
 			self.proceso.terminate()
 			self.proceso = None
 			self.proceso = multiprocessing.Process(target=self.func_spoof)
@@ -630,10 +627,22 @@ class Spoof():
 		arpfake.hwdst = self.new_mac
 		arpfake.hwsrc = self.new_mac
 		#arpfake.show()
-		while 1:
-			#print self.ip_c,self.ip_v,self.new_mac,self.time_lapse
+		if True:
+			while 1:
+				#print self.ip_v,self.ip_c,self.new_mac,self.time_lapse
+				send(arpfake,verbose=0)
+				time.sleep(self.time_lapse)
+		else:
 			send(arpfake,verbose=0)
-			time.sleep(self.time_lapse)
+			#print self.ip_v,self.ip_c,self.new_mac,self.time_lapse
+			while 1:
+				p=sniff(filter="arp and host "+self.ip_v,count=1)
+				if p[0].pdst == self.ip_v and p[0].psrc == self.ip_c:
+					print str(p)
+					send(arpfake,verbose=0)
+			
+				
+		
 
 	def stop(self,master):
 		self.proceso.terminate()
