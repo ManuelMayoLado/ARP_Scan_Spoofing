@@ -62,6 +62,7 @@ def get_netbios(ip,send_end):
 	try:
 		nmblookup = subprocess.check_output(["nmblookup","-A",ip])
 		if re.findall("(.+)<00>",nmblookup):
+			
 			name_nmb = re.findall("(.+)<00>",nmblookup)[0].replace(" ","").replace("\t","")
 			netbios = name_nmb
 		else:
@@ -139,10 +140,10 @@ class App():
 		self.Iinterfaces = InfoInterfaces(self)
 
 		self.barra_escaneo = Progressbar(self.frame,orient="horizontal",maximum=100)
-		self.barra_escaneo.grid(column=0,row=8,columnspan=2,padx=5,pady=10,sticky=W+E)
+		self.barra_escaneo.grid(column=0,row=10,columnspan=3,padx=5,pady=10,sticky=W+E)
 
 		self.root.resizable(width=True,height=True)
-		self.root.minsize(width=650, height=550)
+		self.root.minsize(width=700, height=550)
 
 		self.root.rowconfigure(1, weight=1)
 		self.root.rowconfigure(2, weight=1)
@@ -479,13 +480,17 @@ class InfoInterfaces():
 		interface_label = Label(master.frame,text="Interface:")
 		interface_label.grid(column=0,row=0,padx=5,pady=5,sticky=W)
 
-		Style().configure("Red.TCombobox", foreground="darkred")
+		Style().configure("Blue.TCombobox", foreground="darkblue")
+		Style().configure("Green.TEntry", foreground="darkgreen")
+		Style().configure("Red.TEntry", foreground="darkred")
 
-		self.combobox = Combobox(master.frame,state="readonly",width=15,style="Red.TCombobox")
+		self.combobox = Combobox(master.frame,state="readonly",width=15,style="Blue.TCombobox")
 		self.combobox["values"] = [x for x in interfaces]
 		self.combobox.grid(column=1,row=0,padx=5,pady=5,sticky=W)
 		self.combobox.current(0)
 		self.combobox.bind("<<ComboboxSelected>>", self.iface_selec)
+
+		Separator(master.frame,orient=HORIZONTAL).grid(column=0,row=1,columnspan=8,padx=5,pady=5,sticky=W+E+S)
 
 		self.interface_selec = self.combobox["values"][self.combobox.current()]
 		self.mac = interfaces[self.interface_selec]["mac"]
@@ -495,50 +500,89 @@ class InfoInterfaces():
 		self.gateway = interfaces[self.interface_selec]["gateway"]
 		self.red = interfaces[self.interface_selec]["red"]
 		self.broadcast = interfaces[self.interface_selec]["broadcast"]
+		ip_forward = "error"
 
+		try:
+			ip_forward = int(open("/proc/sys/net/ipv4/ip_forward", "r").read())
+		except:
+			ip_forward = "error"
+
+
+		if ip_forward == 0:
+			self.routing_bit = "No"
+			self.routing_enabled = False
+			self.text_button_routing = "Enabled"
+		elif ip_forward == 1:
+			self.routing_bit = "Yes"
+			self.routing_enabled = True
+			self.text_button_routing = "Disable"
+		else:
+			self.routing_bit = "Error"
+			self.routing_enabled = False
+			self.text_button_routing = "Enabled"
+		
 		self.tipo_scan = Label(master.frame,text="")
 
-		self.mac_label =  Entry(master.frame)
+		self.mac_label =  Entry(master.frame, width=18)
 		self.write_entry(self.mac_label,self.mac)
 
-		self.ip_label =  Entry(master.frame)
+		self.ip_label =  Entry(master.frame, width=18)
 		self.write_entry(self.ip_label,self.ip)
 
-		self.mask_label = Entry(master.frame)
+		self.mask_label = Entry(master.frame, width=18)
 		self.write_entry(self.mask_label,self.mask)
 
-		self.num_mask_label = Entry(master.frame)
+		self.num_mask_label = Entry(master.frame, width=18)
 		self.write_entry(self.num_mask_label,self.num_mask)
 
-		self.gateway_label = Entry(master.frame)
+		self.gateway_label = Entry(master.frame, width=18)
 		self.write_entry(self.gateway_label,self.gateway)
 
-		self.red_label = Entry(master.frame)
+		self.red_label = Entry(master.frame, width=18)
 		self.write_entry(self.red_label,self.red)
 
-		self.broadcast_label = Entry(master.frame)
+		self.broadcast_label = Entry(master.frame, width=18)
 		self.write_entry(self.broadcast_label,self.broadcast)
 
-		Label(master.frame,text="MAC:").grid(column=0,row=1,padx=5,pady=5,sticky=W)
-		Label(master.frame,text="IP:").grid(column=0,row=2,padx=5,pady=5,sticky=W)
-		Label(master.frame,text="NetMask:").grid(column=0,row=3,padx=5,pady=5,sticky=W)
+		self.routing_label = Entry(master.frame,width=8)
+		self.write_entry(self.routing_label,self.routing_bit)
 
-		Label(master.frame,text="Gateway:").grid(column=2,row=1,padx=5,pady=5,sticky=W)
-		Label(master.frame,text="Network:").grid(column=2,row=2,padx=5,pady=5,sticky=W)
-		Label(master.frame,text="Broadcast:").grid(column=2,row=3,padx=5,pady=5,sticky=W)
+		if self.routing_enabled:
+			self.routing_label["style"] = "Green.TEntry"
+		else:
+			self.routing_label["style"] = "Red.TEntry"
 
-		self.mac_label.grid(column=1,row=1,padx=5,pady=5,sticky=W)
-		self.ip_label.grid(column=1,row=2,padx=5,pady=5,sticky=W)
-		self.mask_label.grid(column=1,row=3,padx=5,pady=5,sticky=W)
+		self.button_routing = Button(master.frame,text=self.text_button_routing,command=self.routing_change)
 
-		self.gateway_label.grid(column=3,row=1,padx=5,pady=5,sticky=W)
-		self.red_label.grid(column=3,row=2,padx=5,pady=5,sticky=W)
-		self.broadcast_label.grid(column=3,row=3,padx=5,pady=5,sticky=W)
+		Label(master.frame,text="MAC:").grid(column=0,row=2,padx=5,pady=5,sticky=W)
+		Label(master.frame,text="IP:").grid(column=0,row=3,padx=5,pady=5,sticky=W)
+		Label(master.frame,text="NetMask:").grid(column=0,row=4,padx=5,pady=5,sticky=W)
+		Separator(master.frame,orient=VERTICAL).grid(column=2,row=2,rowspan=3,padx=5,pady=5,sticky=N+S)
+
+		Label(master.frame,text="Gateway:").grid(column=3,row=2,padx=5,pady=5,sticky=W)
+		Label(master.frame,text="Network:").grid(column=3,row=3,padx=5,pady=5,sticky=W)
+		Label(master.frame,text="Broadcast:").grid(column=3,row=4,padx=5,pady=5,sticky=W)
+		Separator(master.frame,orient=VERTICAL).grid(column=5, row=2, rowspan=3, padx=5, pady=5, sticky=N+S)
+
+		Label(master.frame,text="Routing Enable:").grid(column=6,row=2,padx=5,pady=5,sticky=W)
+
+		self.mac_label.grid(column=1,row=2,padx=5,pady=5,sticky=W)
+		self.ip_label.grid(column=1,row=3,padx=5,pady=5,sticky=W)
+		self.mask_label.grid(column=1,row=4,padx=5,pady=5,sticky=W)
+
+		self.gateway_label.grid(column=4,row=2,padx=5,pady=5,sticky=W)
+		self.red_label.grid(column=4,row=3,padx=5,pady=5,sticky=W)
+		self.broadcast_label.grid(column=4,row=4,padx=5,pady=5,sticky=W)
+		
+		self.routing_label.grid(column=7,row=2,padx=5,pady=5,sticky=W)
+		self.button_routing.grid(column=6,row=3,padx=5,pady=5,columnspan=2,sticky=W+E)
+
+		Separator(master.frame,orient=HORIZONTAL).grid(column=0,row=8,columnspan=8,padx=5,pady=5,sticky=W+E+S)
 
 		self.escanear = Button(master.frame,text="Escanear",command=master.escaneo)
-		self.escanear.grid(column=1,row=7,padx=5,pady=10,sticky=W)
+		self.escanear.grid(column=0,row=9,padx=5,pady=15,columnspan=3,sticky=W+E)
 
-		self.tipo_scan.grid(column=2,row=8,columnspan=2,padx=5,pady=10,sticky=W)
+		self.tipo_scan.grid(column=3,row=10,columnspan=3,padx=5,pady=10,sticky=W)
 
 	def write_entry(self,entry,text):
 		entry.config(state="normal")
@@ -572,6 +616,38 @@ class InfoInterfaces():
 				print "Error. Bad interface configuration"
 		else:
 			print "Error. No interface"
+
+	def routing_change(self):
+		if self.routing_bit == "Yes":
+			ip_forward_file = open("/proc/sys/net/ipv4/ip_forward", "w")
+			ip_forward_file.write("0")
+			ip_forward_file.close()
+			Style().configure("Red.TEntry", foreground="darkred")
+			self.routing_label["style"] = "Red.TEntry"
+		elif self.routing_bit == "No" or self.routing_bit == "Error":
+			ip_forward_file = open("/proc/sys/net/ipv4/ip_forward", "w")
+			ip_forward_file.write("1")
+			ip_forward_file.close()
+			Style().configure("Green.TEntry", foreground="darkgreen")
+			self.routing_label["style"] = "Green.TEntry"
+		try:
+			ip_forward = int(open("/proc/sys/net/ipv4/ip_forward", "r").read())
+		except:
+			ip_forward = "error"
+		if ip_forward == 0:
+			self.routing_bit = "No"
+			self.routing_enabled = False
+			self.text_button_routing = "Enabled"
+		elif ip_forward == 1:
+			self.routing_bit = "Yes"
+			self.routing_enabled = True
+			self.text_button_routing = "Disable"
+		else:
+			self.routing_bit = "Error"
+			self.routing_enabled = False
+			self.text_button_routing = "Enabled"
+		self.button_routing["text"] = self.text_button_routing
+		self.write_entry(self.routing_label,self.routing_bit)
 
 class Host():
 	def __init__(self,master,ip,mac,hostname,netbios,n_r):
