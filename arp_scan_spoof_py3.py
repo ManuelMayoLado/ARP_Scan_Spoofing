@@ -2,8 +2,8 @@ import netifaces
 import multiprocessing
 import subprocess
 from subprocess import PIPE
-from Tkinter import *
-from ttk import *
+from tkinter import *
+from tkinter.ttk import *
 from scapy.all import *
 import time
 
@@ -47,9 +47,9 @@ def broadcast(red,mask):
 
 def get_hostname(ip,gw,send_end):
 	try:
-		answer = subprocess.check_output(["nslookup",ip,gw])
-		if re.findall("name =(.+)",answer):
-			name = re.findall("name =(.+)",answer)[0].replace(" ","")
+		answer = str(subprocess.check_output(["nslookup",ip,gw]))
+		if re.findall("name =(.+)\.",answer):
+			name = re.findall("name =(.+)\.",answer)[0].replace(" ","")
 			hostname = name
 		else:
 			hostname = "Unknow"
@@ -60,7 +60,7 @@ def get_hostname(ip,gw,send_end):
 
 def get_netbios(ip,send_end):
 	try:
-		nmblookup = subprocess.check_output(["nmblookup","-A",ip])
+		nmblookup = str(subprocess.check_output(["nmblookup","-A",ip]))
 		if re.findall("(.+)<00>",nmblookup):
 			
 			name_nmb = re.findall("(.+)<00>",nmblookup)[0].replace(" ","").replace("\t","")
@@ -97,26 +97,24 @@ def init():
 	global interfaces
 	global gateways_iff
 	global gateways
-	if __name__ == "__main__":
-		if 2 in netifaces.gateways():
-			gateways = netifaces.gateways()[2]
-		else:
-			print("No gateway")
-			return 0
-
+	if 2 in netifaces.gateways():
+		gateways = netifaces.gateways()[2]
 		gateways_iff = [x[1] for x in gateways if x[2] == True]
 
 		for iff in netifaces.interfaces():
 			config_iface(iff)
-
+			
 		interfaces = {iff:interfaces[iff] for iff in interfaces 
-				if iff != "lo" and len(interfaces[iff].values()) == 6}
-
+			if iff != "lo" and len(interfaces[iff].values()) >= 5}
+			
 		if interfaces:
 			app = App()
-		else:	
+		else:
 			print("No Network configuration")
 			return 0
+	else:
+		print("No gateway")
+		return 0
 	
 class App():
 	def __init__(self):
@@ -302,8 +300,8 @@ class App():
 
 	def show_arp_table(self,arp_scan_list,ping_scan_list):
 		lista_hosts = []
-		arp_table = subprocess.check_output(["arp","-n"])
-		arp_table = arp_table.split("\n")
+		arp_table = str(subprocess.check_output(["arp","-n"]))
+		arp_table = str(arp_table).split("\n")
 		arp_table = arp_table[1:len(arp_table)]
 		for host in arp_table:
 			h_list = host.split()
@@ -314,8 +312,8 @@ class App():
 				lista_hosts.append(host)
 		for host in ping_scan_list:
 			if not host in [ip[0] for ip in lista_hosts]:
-				arp_table_host = subprocess.check_output(["arp","-n",host])
-				arp_table_host = arp_table_host.split("\n")
+				arp_table_host = str(subprocess.check_output(["arp","-n",host]))
+				arp_table_host = str(arp_table_host).split("\n")
 				if len(arp_table_host) >= 2:
 					arp_t = arp_table_host[1].split()
 					if len(arp_t) == 5:
@@ -347,7 +345,7 @@ class App():
 
 	def ping_h(self,ip,send_end):
 		ping = subprocess.Popen(["ping","-c 1",ip],stdout=PIPE,stderr=PIPE,stdin=PIPE)
-		ping_read = ping.stdout.read()
+		ping_read = str(ping.stdout.read())
 		if re.findall("(\d) received",ping_read):
 			reply = int(re.findall("(\d) received",ping_read)[0])
 		else:
@@ -392,7 +390,7 @@ class App():
 				self.barra_escaneo["value"] = 30
 				self.Iinterfaces.tipo_scan["text"] = "ARP Scan..."
 			elif self.escaneando == 2:
-				pdst_ip = str(self.Iinterfaces.ip+"/"+self.Iinterfaces.num_mask)
+				pdst_ip = self.Iinterfaces.ip+"/"+self.Iinterfaces.num_mask
 				alive,dead=srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=pdst_ip),
 					timeout=1, verbose=0, iface=self.Iinterfaces.interface_selec)
 				hosts_list_scan = []
